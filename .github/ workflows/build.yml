@@ -23,7 +23,7 @@ jobs:
 
       - name: Build exe
         run: |
-          pyinstaller --onefile main.py
+          pyinstaller --onefile script.py
 
       - name: Upload EXE
         uses: actions/upload-artifact@v3
