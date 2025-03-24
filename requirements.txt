@@ -2,3 +2,5 @@ tk
 tkcalendar
 requests
 pandas
+pytz
+ib_insync
