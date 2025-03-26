@@ -35,7 +35,6 @@ class StockScreenerApp:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         
-        # Controls Frame
         control_frame = ttk.LabelFrame(main_frame, text="Controls", padding=10)
         control_frame.grid(row=0, column=0, sticky=tk.NSEW, padx=5, pady=5)
         ttk.Label(control_frame, text="Screening Date (YYYY-MM-DD):").grid(row=0, column=0, sticky=tk.W)
@@ -48,7 +47,6 @@ class StockScreenerApp:
         ttk.Button(btn_frame, text="Run Screener", command=self.run_screener).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="Reset", command=self.reset).pack(side=tk.LEFT, padx=5)
         
-        # Conditions Frame
         cond_frame = ttk.LabelFrame(main_frame, text="Indicators", padding=10)
         cond_frame.grid(row=0, column=1, sticky=tk.NSEW, padx=5, pady=5)
         cond_canvas = tk.Canvas(cond_frame, borderwidth=0)
@@ -60,7 +58,6 @@ class StockScreenerApp:
         cond_canvas.pack(side="left", fill="both", expand=True)
         cond_scrollbar.pack(side="right", fill="y")
         
-        # Ticker Selection Frame
         self.ticker_frame = ttk.LabelFrame(main_frame, text="Ticker Selection", padding=10)
         self.ticker_frame.grid(row=0, column=2, sticky=tk.NSEW, padx=5, pady=5)
         self.ticker_inner_frame = ttk.Frame(self.ticker_frame)
@@ -70,7 +67,6 @@ class StockScreenerApp:
         ttk.Button(ticker_btn_frame, text="Select All", command=self.select_all_tickers).pack(side=tk.LEFT, padx=2)
         ttk.Button(ticker_btn_frame, text="Unselect All", command=self.unselect_all_tickers).pack(side=tk.LEFT, padx=2)
         
-        # Results Frame
         results_frame = ttk.LabelFrame(main_frame, text="Results", padding=10)
         results_frame.grid(row=1, column=0, columnspan=3, sticky=tk.NSEW, padx=5, pady=5)
         self.tree = ttk.Treeview(results_frame, columns=("Num", "Ticker", "Open"), show="headings")
@@ -166,14 +162,11 @@ class StockScreenerApp:
     
     def fetch_data(self, ticker, day_minus1, day):
         """
-        Fetch extended hours data for ~7 days so we can handle weekends/holidays.
+        Fetch extended hours data over 7 days to cover weekends/holidays.
         """
         try:
             contract = Stock(ticker, 'SMART', 'USD')
             ib.qualifyContracts(contract)
-
-            # Set end time to (screening date + 1 at 11:00 US/Eastern) 
-            # and use duration '7 D' to cover up to a full week of data.
             target_datetime = datetime.datetime.combine(day + datetime.timedelta(days=1), datetime.time(11, 0))
             localized_dt = eastern.localize(target_datetime).astimezone(pytz.utc)
             end_time_str = localized_dt.strftime('%Y%m%d %H:%M:%S')
@@ -185,14 +178,13 @@ class StockScreenerApp:
                 durationStr='7 D',
                 barSizeSetting='1 hour',
                 whatToShow='TRADES',
-                useRTH=False,   # Extended hours mode (4:00-20:00)
+                useRTH=False,
                 formatDate=1
             )
             
             if not bars:
                 logger.warning(f"No data returned for {ticker}")
                 return pd.DataFrame()
-
             df = util.df(bars)
             df['date'] = pd.to_datetime(df['date'])
             df.set_index('date', inplace=True)
@@ -205,22 +197,19 @@ class StockScreenerApp:
             df.to_csv(f"{ticker}_raw_data.csv")
             logger.info(f"Raw data for {ticker} saved to {ticker}_raw_data.csv")
             return df
-
         except Exception as e:
             logger.error(f"Error fetching {ticker}: {e}")
             return pd.DataFrame()
 
     def find_previous_16h_open(self, df, screening_date):
         """
-        Starting from (screening_date - 1), go backwards until we find a day that has a 16:00 bar.
-        Return the 'Open' of that bar, or None if not found within ~7 days of data.
+        Starting from screening_date - 1, go backwards until finding a day with an exact 16:00 bar.
+        Return the 'Open' of that bar, or None if not found.
         """
         day_cursor = screening_date - datetime.timedelta(days=1)
-        # We'll go back up to 6 times (covering ~7 days total)
         for _ in range(7):
             prev_data = df[df.index.date == day_cursor]
             if not prev_data.empty:
-                # Try exact 16:00 bar
                 target_bar = prev_data.between_time("16:00", "16:00")
                 if not target_bar.empty:
                     open_16h = target_bar.iloc[0]['Open']
@@ -230,12 +219,9 @@ class StockScreenerApp:
         return None
 
     def evaluate_conditions(self, data, open_16h_day_minus1):
-        """
-        Evaluate conditions for the screening date's data, using open_16h_day_minus1 as needed.
-        """
         try:
             results = {}
-            # 1-14 => check hour-based "Close ≥ Open"
+            # Conditions 1-14: Check if for each mapped hour, Close >= Open.
             hour_map = {
                 1:5, 2:6, 3:7, 4:8, 5:9,
                 6:10, 7:11, 8:12, 9:13, 10:15,
@@ -253,22 +239,120 @@ class StockScreenerApp:
                     row = rows.iloc[-1]
                     results[cid] = (row['Close'] >= row['Open'])
                     logger.info(f"[Condition {cid}] Hour {hour}: Open={row['Open']}, Close={row['Close']} => {results[cid]}")
-
-            # 15-47 => your custom logic. For now, set placeholders to True if checked.
-            for cid in range(15, 48):
+            # Conditions 15-19: For hours 15 to 19, check High != Low.
+            for cid, hour in zip(range(15, 20), range(15, 20)):
                 if not self.conditions.get(cid, tk.BooleanVar()).get():
                     continue
-                # Example: Condition 43 compares high1 to 1.5 * open_16h_day_minus1
-                # You can implement as needed. For now, placeholder:
-                results[cid] = True
+                rows = data.between_time(f"{hour:02d}:00", f"{hour:02d}:59")
+                if rows.empty:
+                    logger.info(f"No bar found for hour {hour} => condition {cid} = False")
+                    results[cid] = False
+                else:
+                    row = rows.iloc[-1]
+                    results[cid] = (row['High'] != row['Low'])
+                    logger.info(f"[Condition {cid}] Hour {hour}: High={row['High']}, Low={row['Low']} => {results[cid]}")
+            # Conditions 20-26: Using 18:00 bar.
+            row18 = data.between_time("18:00", "18:59")
+            if row18.empty:
+                logger.info("No bar found for 18:00 => Conditions 20-26 = False")
+                for cid in [20,21,23,24,25,26]:
+                    results[cid] = False
+            else:
+                r18 = row18.iloc[-1]
+                results[20] = (r18['Open'] == r18['Low'])
+                results[21] = (r18['Close'] != r18['High'])
+                results[23] = (r18['Close'] < r18['Open'])
+                results[24] = (r18['Open'] != r18['High'])
+                results[25] = (r18['Close'] == r18['Low'])
+                results[26] = (r18['High'] == r18['Low'])
+                logger.info(f"[18:00] r18: {r18.to_dict()}, Conditions 20-26: {{20: {results[20]}, 21: {results[21]}, 23: {results[23]}, 24: {results[24]}, 25: {results[25]}, 26: {results[26]}}}")
+            # Condition 22: High from 04:00-20:00 equals High from 10:00-15:00.
+            high1 = data.between_time("04:00", "20:00")["High"].max()
+            high2 = data.between_time("10:00", "15:00")["High"].max()
+            results[22] = (high1 == high2)
+            logger.info(f"High1 (04:00-20:00) = {high1}, High2 (10:00-15:00) = {high2}, Condition 22 = {results[22]}")
+            # Condition 27: High from 04:00-20:00 equals High from 10:00-20:00.
+            high3 = data.between_time("10:00", "20:00")["High"].max()
+            results[27] = (high1 == high3)
+            logger.info(f"High3 (10:00-20:00) = {high3}, Condition 27 = {results[27]}")
+            # Conditions 28-30: Compare 10:00 and 09:00 bars.
+            row10 = data.between_time("10:00", "10:59")
+            row9  = data.between_time("09:00", "09:59")
+            if row10.empty or row9.empty:
+                results[28] = results[29] = results[30] = False
+            else:
+                r10 = row10.iloc[-1]
+                r9 = row9.iloc[-1]
+                results[28] = (r10["Close"] < r10["Open"])
+                results[29] = (r10["High"] >= r9["High"])
+                results[30] = (r10["Low"] >= r9["Low"])
+                logger.info(f"[10:00] r10: {r10.to_dict()}, [09:00] r9: {r9.to_dict()}, Conditions 28-30: {{28: {results[28]}, 29: {results[29]}, 30: {results[30]}}}")
+            # Conditions 31-32: Compare 16:00 and 17:00 bars.
+            row16 = data.between_time("16:00", "16:59")
+            row17 = data.between_time("17:00", "17:59")
+            if row16.empty or row17.empty:
+                results[31] = results[32] = False
+            else:
+                r16 = row16.iloc[-1]
+                r17 = row17.iloc[-1]
+                results[31] = (r17["Low"] <= r16["Low"])
+                results[32] = (r17["Open"] == r17["Low"])
+                logger.info(f"[16:00] r16: {r16.to_dict()}, [17:00] r17: {r17.to_dict()}, Conditions 31-32: {{31: {results[31]}, 32: {results[32]}}}")
+            # Conditions 33-34: For 18:00 bar.
+            if not row18.empty:
+                r18 = row18.iloc[-1]
+                results[33] = (r18["Open"] == r18["High"])
+                results[34] = (r18["Close"] != r18["Low"])
+                logger.info(f"[18:00] Conditions 33-34: {{33: {results[33]}, 34: {results[34]}}}")
+            else:
+                results[33] = results[34] = False
+            # Conditions 35-38: Compare 19:00 bar with 16:00, 17:00, 18:00.
+            row19 = data.between_time("19:00", "19:59")
+            if row16.empty or row19.empty:
+                results[35] = results[36] = results[37] = results[38] = False
+            else:
+                r19 = row19.iloc[-1]
+                results[35] = (r19["Close"] > row16.iloc[-1]["Low"])
+                results[36] = (r19["Low"] > row16.iloc[-1]["Low"])
+                # For condition 37, if 17:00 data is available use that; otherwise use r19's low.
+                results[37] = (r19["Low"] > (row17.iloc[-1]["Low"] if not row17.empty else r19["Low"]))
+                # For condition 38, similarly compare to 18:00.
+                results[38] = (r19["Low"] > (r18["Low"] if not row18.empty else r19["Low"]))
+                logger.info(f"[19:00] r19: {r19.to_dict()}, Conditions 35-38: {{35: {results[35]}, 36: {results[36]}, 37: {results[37]}, 38: {results[38]}}}")
+            # Conditions 39-40: For 16:00 bar.
+            if not row16.empty:
+                r16 = row16.iloc[-1]
+                results[39] = (r16["Open"] == r16["Low"])
+                results[40] = (r16["Open"] == r16["High"])
+                logger.info(f"[16:00] Conditions 39-40: {{39: {results[39]}, 40: {results[40]}}}")
+            else:
+                results[39] = results[40] = False
+            # Conditions 41-42: For 18:00 bar.
+            if not row18.empty:
+                r18 = row18.iloc[-1]
+                results[41] = (r18["Close"] < r18["Open"])
+                results[42] = (r18["Close"] >= r18["Open"])
+                logger.info(f"[18:00] Conditions 41-42: {{41: {results[41]}, 42: {results[42]}}}")
+            else:
+                results[41] = results[42] = False
+            # Conditions 43-46: Compare max high from 04:00-20:00 (high1) with multiples of Open16hDay-1.
+            results[43] = (high1 > 1.5 * open_16h_day_minus1) if high1 is not None else False
+            results[44] = (high1 > 1.7 * open_16h_day_minus1) if high1 is not None else False
+            results[45] = (high1 > 2.0 * open_16h_day_minus1) if high1 is not None else False
+            results[46] = (high1 > 2.3 * open_16h_day_minus1) if high1 is not None else False
+            # Condition 47: Check if minimum low from 04:00-20:00 is less than 0.5 * Open16hDay-1.
+            low_range = data.between_time("04:00", "20:00")["Low"].min()
+            results[47] = (low_range < 0.5 * open_16h_day_minus1) if low_range is not None else False
 
+            logger.info(f"Evaluated conditions: {results}")
+            # Only return True if all checked conditions are True.
             return all(results.get(cid, False) for cid, var in self.conditions.items() if var.get())
         except Exception as e:
-            logger.error(f"Error evaluating conditions: {e}")
+            logger.error("Error evaluating conditions: " + str(e))
             return False
-    
+
     def save_results(self):
-        with open('screener_results.txt', 'w') as f:
+        with open("screener_results.txt", "w") as f:
             f.write("Num\tTicker\tOpen16hDay-1\n")
             for num, ticker, open_val in sorted(self.results, key=lambda x: x[0]):
                 f.write(f"{num}\t{ticker}\t{open_val:.2f}\n")
@@ -283,7 +367,6 @@ class StockScreenerApp:
             return
 
         self.ohlc_data, self.results = {}, []
-
         selected_tickers = [t for t, var in self.ticker_vars.items() if var.get()]
         logger.info(f"Running screener for date {screening_date} on tickers: {selected_tickers}")
 
@@ -293,26 +376,24 @@ class StockScreenerApp:
             if df.empty or not isinstance(df.index, pd.DatetimeIndex):
                 logger.warning(f"Data empty or index invalid for {ticker}, skipping.")
                 continue
-
             self.ohlc_data[ticker] = df
 
-            # 1) Find the open at 16:00 from the last trading day prior to screening_date
+            # Find Open16hDay-1 by scanning backwards for a day with an exact 16:00 bar.
             open_16h = self.find_previous_16h_open(df, screening_date)
             if open_16h is None:
-                logger.info(f"No valid 16:00 bar found for {ticker} within ~7 days prior to {screening_date}. Skipping.")
+                logger.info(f"No valid 16:00 bar found for {ticker} within ~7 days before {screening_date}. Skipping ticker.")
                 continue
+            logger.info(f"For {ticker}, Open16hDay-1 is taken as {open_16h}")
 
-            # 2) Filter data for the actual screening date
+            # Evaluate conditions only on the screening date's data.
             screening_data = df[df.index.date == screening_date]
             if screening_data.empty:
-                logger.info(f"No data for {ticker} on screening date {screening_date}. Skipping.")
+                logger.info(f"No data for {ticker} on screening date {screening_date}. Skipping ticker.")
                 continue
 
-            # 3) Evaluate conditions on the screening date
             if self.evaluate_conditions(screening_data, open_16h):
                 self.results.append((len(self.results) + 1, ticker, open_16h))
 
-        # Insert results in the Treeview
         for res in self.results:
             self.tree.insert("", "end", values=res)
 
