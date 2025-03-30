@@ -4,7 +4,7 @@ import datetime
 import pytz
 import logging
 import pandas as pd
-from pandas.tseries.offsets import BDay
+from pandas.tseries.offsets import BDay 
 from ib_insync import IB, Stock, util
 
 logging.basicConfig(level=logging.DEBUG,
@@ -32,7 +32,7 @@ class StockScreenerApp:
     def create_widgets(self):
         # Define a small font style for Indicators
         style = ttk.Style(self.root)
-        style.configure("SmallIndicator.TCheckbutton", font=("Arial", 8))
+        style.configure("SmallIndicator.TCheckbutton", font=("Arial", 12))
         
         # Main container
         main_frame = ttk.Frame(self.root, padding=5)
@@ -138,8 +138,15 @@ class StockScreenerApp:
         # Place conditions in columns of max 25 rows with small font style.
         for i, (cid, desc) in enumerate(cond_defs):
             var = tk.BooleanVar(value=False)
-            row = i % 25
-            col = i // 25
+            # Override placement for conditions 23 and 24:
+            if cid == 23:
+                row, col = 22, 0  # For example, place condition 23 at row 22, column 0
+            elif cid == 24:
+                row, col = 22, 1  # Place condition 24 at row 22, column 1
+            else:
+                # Default placement calculation for others.
+                row = i % 25
+                col = i // 25
             ttk.Checkbutton(
                 self.cond_scrollable,
                 text=f"{cid}. {desc}",
@@ -147,6 +154,7 @@ class StockScreenerApp:
                 style="SmallIndicator.TCheckbutton"
             ).grid(row=row, column=col, padx=2, pady=2, sticky=tk.W)
             self.conditions[cid] = var
+
 
     def get_default_date(self):
         now = datetime.datetime.now(eastern)
