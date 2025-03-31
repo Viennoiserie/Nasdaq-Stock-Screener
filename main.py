@@ -402,7 +402,7 @@ class StockScreenerApp:
         with open("screener_results.txt", "w") as f:
             f.write("Serial\tTickerNo\tTicker\tOpen16hDay-1\n")
             for serial, ticker_no, ticker, open_val in sorted(self.results, key=lambda x: x[0]):
-                f.write(f"{serial}\t{ticker_no}\t{ticker}\t{open_val:.2f}\n")
+                f.write(f"{serial}\t{ticker_no}\t{ticker}\t{open_val}\n")
         logger.info("Results saved to screener_results.txt")
     
     def run_screener(self):
@@ -446,7 +446,7 @@ class StockScreenerApp:
 
         # Insert results into the Treeview as a single composite string.
         for serial, ticker_no, ticker, open_val in self.results:
-            result_str = f"{serial}. TickerNo:{ticker_no} - {ticker} - Open16h: {open_val:.2f}"
+            result_str = f"{serial}. TickerNo:{ticker_no} - {ticker} - Open16h: {open_val}"
             self.tree.insert("", "end", values=(result_str,))
 
         self.save_results()
