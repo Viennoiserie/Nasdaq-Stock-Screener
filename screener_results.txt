@@ -1,7 +1,0 @@
-Num	Ticker	Open16hDay-1
-1	ONDS	0.74
-2	PHAT	6.20
-3	TSVT	4.96
-4	BHAT	3.02
-5	RAY	1.01
-6	HEPA	0.85
