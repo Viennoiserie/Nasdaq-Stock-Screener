@@ -1,4 +1,3 @@
-import re
 import pytz
 import logging
 import datetime
@@ -54,7 +53,7 @@ class StockScreenerApp:
         self.ohlc_data = {}
         self.conditions = {}
 
-        self.results = []  # Will hold tuples: (serial, ticker_index, ticker, open_16h)
+        self.results = []  
         self.create_widgets()
         self.setup_conditions()
     
@@ -173,10 +172,9 @@ class StockScreenerApp:
 
         tab1 = ttk.Frame(notebook)
         tab2 = ttk.Frame(notebook)
-        notebook.add(tab1, text="Conditions 1 –> 102")
-        notebook.add(tab2, text="Conditions 103 –> 126")
+        notebook.add(tab1, text="Conditions 1 –> 101")
+        notebook.add(tab2, text="Conditions 102 –> 126")
 
-        # Helper function
         def create_grid_conditions(tab, start_idx, end_idx):
 
             chunk_size = 34
@@ -239,8 +237,8 @@ class StockScreenerApp:
                     var.trace_add("write", make_callback(var, inv_var))
                     inv_var.trace_add("write", make_callback(inv_var, var))
 
-        create_grid_conditions(tab1, 0, 102)
-        create_grid_conditions(tab2, 103, len(cond_defs))
+        create_grid_conditions(tab1, 0, 101)
+        create_grid_conditions(tab2, 101, len(cond_defs))
                
 # endregion
 
@@ -323,7 +321,7 @@ class StockScreenerApp:
         for ticker in selected_tickers:
 
             logger.info(f"Fetching data for {ticker}")
-            df = self.fetch_data(ticker, screening_date - datetime.timedelta(days=1), screening_date)
+            df = self.fetch_data(ticker, screening_date - datetime.timedelta(days=2), screening_date)
 
             if df.empty or not isinstance(df.index, pd.DatetimeIndex):
                 logger.warning(f"Data empty or index invalid for {ticker}, skipping.")
@@ -331,38 +329,52 @@ class StockScreenerApp:
 
             self.ohlc_data[ticker] = df
 
-            # Find Open16hDay-1 by scanning backwards for a day with an exact 16:00 bar.
+            data_day_minus1 = None
+            day_cursor = screening_date - datetime.timedelta(days=1)
+
+            for _ in range(7):  
+
+                temp = df[df.index.date == day_cursor]
+
+                if not temp.empty:
+                    
+                    data_day_minus1 = temp
+                    break
+
+                day_cursor -= datetime.timedelta(days=1)
+
+            data = df[df.index.date == screening_date]
+
+            if data_day_minus1.empty or data.empty:
+                logger.info(f"No data for {ticker} on screening date or previous day. Skipping ticker.")
+                continue
+
             open_16h = self.find_previous_16h_open(df, screening_date)
 
             if open_16h is None:
+
                 logger.info(f"No valid 16:00 bar found for {ticker} within ~7 days before {screening_date}. Skipping ticker.")
                 continue
 
             logger.info(f"For {ticker}, Open16hDay-1 is taken as {open_16h}")
 
-            # Evaluate conditions only on the screening date's data.
-            screening_data = df[df.index.date == screening_date]
+            if self.evaluate_conditions(data, open_16h, data_day_minus1):
 
-            if screening_data.empty:
-                logger.info(f"No data for {ticker} on screening date {screening_date}. Skipping ticker.")
-                continue
-
-            if self.evaluate_conditions(screening_data, open_16h):
-                # Get the ticker's number from the original list.
                 ticker_no = self.tickers.index(ticker) + 1 if ticker in self.tickers else 0
                 serial = len(self.results) + 1
 
                 self.results.append((serial, ticker_no, ticker, open_16h))
 
-        # Insert results into the Treeview as a single composite string.
         for serial, ticker_no, ticker, open_val in self.results:
+
             result_str = f"{serial}. TickerNo:{ticker_no} - {ticker} - Open16h: {open_val}"
             self.tree.insert("", "end", values=(result_str,))
 
         self.save_results()
+
         messagebox.showinfo("Success", f"Found {len(self.results)} matches.\nResults saved to screener_results.txt")
         logger.info(f"Screener finished with {len(self.results)} matches.")
-    
+
     def deselect_all_conditions(self):
 
         for key, var in self.conditions.items():
@@ -386,7 +398,6 @@ class StockScreenerApp:
 
         self.ticker_vars = {}
 
-        # Place tickers in columns of max 25 rows.
         for i, ticker in enumerate(self.tickers, start=1):
 
             var = tk.BooleanVar(value=True)
@@ -420,7 +431,7 @@ class StockScreenerApp:
             contract = Stock(ticker, "SMART", "USD")
             ib.qualifyContracts(contract)
 
-            target_datetime = datetime.datetime.combine(day + datetime.timedelta(days=1), datetime.time(11, 0))
+            target_datetime = datetime.datetime.combine(day, datetime.time(23, 59))
             localized_dt = eastern.localize(target_datetime).astimezone(pytz.utc)
             end_time_str = localized_dt.strftime("%Y%m%d %H:%M:%S")
 
@@ -440,6 +451,7 @@ class StockScreenerApp:
             
             df = util.df(bars)
             df["date"] = pd.to_datetime(df["date"])
+
             df.set_index("date", inplace=True)
 
             if df.index.tz is None:
@@ -464,9 +476,9 @@ class StockScreenerApp:
          
         now = datetime.datetime.now(eastern)
 
-        # If it's after 20:00 Eastern, pick the next business day
         default_date = (now + BDay(1)).date() if now.time() > datetime.time(20, 0) else now.date()
         logger.info(f"Default screening date set to: {default_date}")
+
         return default_date
 
     def evaluate_conditions(self, data, open_16h_day_minus1, data_day_minus1=None):
@@ -505,7 +517,7 @@ class StockScreenerApp:
             inverse = self.conditions.get(f"inv_{cid}", None)
 
             try:
-                # Defensive: if cond is a pandas Series with one value, get scalar
+                
                 if isinstance(cond, pd.Series):
 
                     if cond.size == 1:
@@ -522,6 +534,7 @@ class StockScreenerApp:
 
             if primary and primary.get():
                 results[cid] = cond_bool
+
             elif inverse and inverse.get():
                 results[cid] = not cond_bool
 
@@ -639,9 +652,20 @@ class StockScreenerApp:
                 check(cid, bar is not None and bar["High"] != bar["Low"])
 
             # Conditions 102–107: First bar = 4h to 9h
-            for cid, hour in zip(range(102, 108), range(4, 10)):
-                bar = get_bar(data, hour)
-                check(cid, bar is not None)
+            first_bar_hour = None
+
+            for h in range(4, 10):
+                bar = get_bar(data, h)
+                if bar is not None:
+                    first_bar_hour = h
+                    break 
+
+            for cid in range(102, 108):
+                check(cid, False)
+
+            if first_bar_hour:
+                cid = 102 + (first_bar_hour - 4) 
+                check(cid, True)
 
             # Conditions 108–111 (Open = Low)
             for cid, hour in zip(range(108, 112), range(16, 20)):
@@ -694,34 +718,40 @@ class StockScreenerApp:
             return all(results.values())
 
         except Exception as e:
+            
             logger.error("Error evaluating conditions: %s", e)
             return False
         
     def find_previous_16h_open(self, df, screening_date):
 
         """
-        Starting from screening_date - 1, go backwards until finding a day with an exact 16:00 bar.
-        Return the 'Open' of that bar, or None if not found.
+        Look back from the day before screening_date up to 7 days.
+        For each day, return the latest bar between 16:00 and 23:59 (US/Eastern).
         """
 
         day_cursor = screening_date - datetime.timedelta(days=1)
 
         for _ in range(7):
-            prev_data = df[df.index.date == day_cursor]
 
-            if not prev_data.empty:
-                target_bar = prev_data.between_time("16:00", "16:00")
+            day_data = df[df.index.date == day_cursor]
 
-                if not target_bar.empty:
+            if not day_data.empty:
+               
+                candidate_bar = day_data.between_time("16:00", "16:00")
 
-                    open_16h = target_bar.iloc[0]["Open"]
-                    logger.info(f"Found 16:00 bar for {day_cursor}, open={open_16h}")
+                if not candidate_bar.empty:
+
+                    latest_bar = candidate_bar.iloc[-1]
+                    open_16h = latest_bar["Open"]
+
+                    logger.info(f"Found bar for {day_cursor} at {latest_bar.name.strftime('%H:%M')}, open={open_16h}")
                     return open_16h
                 
             day_cursor -= datetime.timedelta(days=1)
 
+        logger.warning(f"No 16:00+ bar found in last 7 days before {screening_date}")
         return None
-
+    
 # endregion
 
 if __name__ == "__main__":
